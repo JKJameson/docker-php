@@ -1,0 +1,74 @@
+#!/bin/sh
+set -e
+
+CREATE_USER=true
+if [ -f /user-created ]; then
+  CREATE_USER=false
+fi
+
+if $CREATE_USER; then
+  addgroup -g $PGID $PGROUP
+  adduser -S -u $PUID -G $PGROUP $PUSER
+  ln -s /public /home/$PUSER/public_html
+fi
+
+if [ "$SOCKET_USER" == "0" ]; then
+  SOCKET_USER=root
+  SOCKET_GROUP=root
+else
+  if [ "$SOCKET_USER" == "$PUID" ]; then
+    SOCKET_USER="$PUSER"
+    SOCKET_GROUP="$PGROUP"
+  else
+    if $CREATE_USER; then
+      addgroup -g $SOCKET_GROUP socket
+      adduser -S -u $SOCKET_USER -G socket socket
+    fi
+  fi
+  SOCKET_USER=socket
+  SOCKET_GROUP=socket
+fi
+
+cat << EOF > /etc/php7/php-fpm.conf
+[global]
+error_log = /proc/self/fd/2
+daemonize = no
+rlimit_files = 10240
+rlimit_core = 0
+include=/etc/php7/php-fpm.d/*.conf
+EOF
+
+cat << EOF > /etc/php7/php-fpm.d/www.conf
+[www]
+user = $PUSER
+group = $PGROUP
+chdir = /public
+
+listen = /tmp/fpm.sock
+listen.owner = $SOCKET_USER
+listen.group = $SOCKET_GROUP
+listen.mode = $SOCKET_MODE
+
+process.priority = $PRIORITY
+process.dumpable = no
+
+pm = ondemand
+pm.max_children = $MAX_CHILDREN
+pm.max_requests = 500
+
+rlimit_files = 1024
+rlimit_core = 0
+
+catch_workers_output = yes
+decorate_workers_output = yes
+security.limit_extensions = .php
+
+php_flag[display_errors] = off
+php_admin_value[memory_limit] = $MEMORY_LIMIT
+EOF
+
+if $CREATE_USER; then
+  touch /user-created
+fi
+
+php-fpm7
